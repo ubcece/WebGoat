@@ -28,8 +28,11 @@ import org.owasp.webgoat.assignments.AttackResult;
 import org.springframework.web.bind.annotation.*;
 
 import javax.tools.*;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -82,19 +85,53 @@ public class SqlInjectionLesson10b extends AssignmentEndpoint {
         }
     }
 
-    private List<Diagnostic> compileFromString(String s) {
+    private List<Diagnostic<? extends JavaFileObject>> compileFromString(String s) {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-        DiagnosticCollector diagnosticsCollector = new DiagnosticCollector();
-        StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnosticsCollector, null, null);
+        DiagnosticCollector<JavaFileObject> diagnosticsCollector = new DiagnosticCollector<>();
+        JavaFileManager fileManager = getFileManager(compiler, diagnosticsCollector);
         JavaFileObject javaObjectFromString = getJavaFileContentsAsString(s);
-        Iterable fileObjects = Arrays.asList(javaObjectFromString);
+        Iterable<JavaFileObject> fileObjects = Arrays.asList(javaObjectFromString);
         JavaCompiler.CompilationTask task = compiler.getTask(null, fileManager, diagnosticsCollector, null, null, fileObjects);
         Boolean result = task.call();
-        List<Diagnostic> diagnostics = diagnosticsCollector.getDiagnostics();
+        List<Diagnostic<? extends JavaFileObject>> diagnostics = diagnosticsCollector.getDiagnostics();
         return diagnostics;
     }
 
-    private SimpleJavaFileObject getJavaFileContentsAsString(String s) {
+    private static class JavaByteObject extends SimpleJavaFileObject {
+        private ByteArrayOutputStream outputStream;
+
+        protected JavaByteObject(String name) throws URISyntaxException {
+            super(URI.create("bytes:///" + name.replaceAll("\\.", "/")), Kind.CLASS);
+            this.outputStream = new ByteArrayOutputStream();
+        }
+
+        @Override
+        public OutputStream openOutputStream() throws IOException {
+            return this.outputStream;
+        }
+
+        public byte[] getBytes() {
+            return this.outputStream.toByteArray();
+        }
+    }
+
+    private JavaFileManager getFileManager(JavaCompiler compiler, DiagnosticCollector<JavaFileObject> diagnosticsCollector) {
+        return new ForwardingJavaFileManager<>(compiler.getStandardFileManager(diagnosticsCollector, null, null)) {
+            @Override
+            public JavaFileObject getJavaFileForOutput(Location location,
+                    String className,
+                    JavaFileObject.Kind kind,
+                    FileObject sibling) throws IOException {
+                try {
+                    return new JavaByteObject(className);
+                } catch (URISyntaxException badClassName) {
+                    throw new IOException(badClassName);
+                }
+            }
+        };
+    }
+
+    private JavaFileObject getJavaFileContentsAsString(String s) {
         StringBuilder javaFileContents = new StringBuilder("import java.sql.*; public class TestClass { static String DBUSER; static String DBPW; static String DBURL; public static void main(String[] args) {" + s + "}}");
         JavaObjectFromString javaFileObject = null;
         try {
